@@ -1,3 +1,7 @@
+# Do inference using the PythonPredictor class from floatingobjects
+# on the test dataset
+# We compare the approaches with/without ship classifier.
+
 import os
 from tqdm import tqdm
 import torch
