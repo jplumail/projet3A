@@ -20,3 +20,5 @@ pip install -e .
 ```
 
 Under the `floatingobjects/data` folder, download the data from [this Drive](https://drive.google.com/drive/folders/1QGjzRTVRQbf4YbzfUWMeIdJvYkzuipGJ). It contains the ESA floating objects database.
+
+Under the `projet3A/models` folder, download the classifier weights from [this Drive](https://drive.google.com/drive/folders/1IJGJNVN2o7yNTA1jluq9Rd6Q3pTox8Tg). [Follow the instructions](https://drive.google.com/drive/folders/1IJGJNVN2o7yNTA1jluq9Rd6Q3pTox8Tg) to download the U-Net and MANet pretrained weights from the ESA repo.
