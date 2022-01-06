@@ -2,7 +2,6 @@
 # It computes metrics and saves them in metrics.txt
 
 import os
-from floatingobjects.transforms import get_transform
 from tqdm import tqdm
 import rasterio as rio
 import numpy as np
@@ -80,7 +79,6 @@ def predictions_all(root_data, predictions_path):
 def predictions_esa(root_data, predictions_path):
     threshold = 0.03
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    transform = get_transform("test")
     for model in ["unet", "manet"]:
         for fold in [1, 2]:
             dataset = FloatingSeaObjectDataset(root_data, fold="test", foldn=fold, transform=None, output_size=128, use_l2a_probability=0.5)
