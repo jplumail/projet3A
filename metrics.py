@@ -1,4 +1,4 @@
-# This file should be ran after predict.py
+# This file should be run after predict.py
 # It computes metrics and saves them in metrics.txt
 
 import os
