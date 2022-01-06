@@ -10,10 +10,7 @@ from floatingobjects.predictor import PythonPredictor
 from floatingobjects.data import FloatingSeaObjectDataset
 
 
-if __name__ == "__main__":
-
-    root_data = "floatingobjects\\data"
-    predictions_path = "predictions"
+def predictions_all(root_data, predictions_path):
 
     for model in ["unet", "manet"]:
         model_path = os.path.join(predictions_path, model)
@@ -38,9 +35,15 @@ if __name__ == "__main__":
                 )
 
                 for region in tqdm(regions):
-                    region_path = os.path.join(classifier_path, f"{region}.tif")
                     predictor.predict(os.path.join(root_data,f"{region}.tif"), classifier_path)
                 
                 del predictor
                 torch.cuda.empty_cache()
+
+if __name__ == "__main__":
+
+    root_data = "floatingobjects\\data"
+    predictions_path = "predictions-all"
+
+    predictions_all(root_data, predictions_path)
 
