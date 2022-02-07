@@ -62,8 +62,6 @@ def predictions_all(root_data, predictions_path):
                     # Get labels
                     labels = get_labels(dataset, y_pred)
 
-                    print(y_pred.shape)
-
                     t = 0.3
                     y_pred = y_pred.ravel() > t
                     labels = labels.ravel()
@@ -79,43 +77,57 @@ def predictions_all(root_data, predictions_path):
 def predictions_esa(root_data, predictions_path):
     threshold = 0.03
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    
     for model in ["unet", "manet"]:
         for fold in [1, 2]:
+
             dataset = FloatingSeaObjectDataset(root_data, fold="test", foldn=fold, transform=None, output_size=128, use_l2a_probability=0.5)
             loader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=False, num_workers=4)
 
             m = get_model(model, pretrained=False)
             m.load_state_dict(torch.load(f"models\\{model}-posweight1-lr001-bs160-ep50-aug1-seed{fold-1}.pth.tar")["model_state_dict"])
             m = m.to(device)
+            m.eval()
 
-            for classifier in ["no-classifier"]:
+            for classifier in ["classifier", "no-classifier"]:
 
                 classifier_model_path = f"models\\checkpoint-fold{fold}.pt" if classifier=="classifier" else None
+                # Load classifier
+                if classifier_model_path:
+                    classifier_model = get_model("classifier")
+                    checkpoint = torch.load(classifier_model_path)
+                    classifier_model.load_state_dict(checkpoint["state_dict"])
+                    classifier_model = classifier_model.to(device)
+                    classifier_model.eval()
+                    center = checkpoint["center"].to(device)
+                    scale = checkpoint["scale"].to(device)
+                else:
+                    classifier_model = None
+
                 cm = np.zeros((2,2), dtype=int)
-                for idx, (image, y_true, _) in tqdm(enumerate(loader), total=len(loader)):
+                for idx, (image, target, _) in tqdm(enumerate(loader), total=len(loader)):
                     image = image.to(device, dtype=torch.float)
                     image *= 1e-4
                     with torch.no_grad():
                         # forward pass: compute predicted outputs by passing inputs to the model
                         logits = m.forward(image)
-                        output = torch.sigmoid(logits)
+                        output = torch.sigmoid(logits)[:, 0]
 
-                        # Sans classifier pour l'instant
-                        """
-                        if self.classifier:
-                            mask_floating_objects = y_logits > 0.05
-                            tensor = torch.from_numpy(image.astype(np.float32)).float().to(self.device).unsqueeze(0)
+                        if classifier == "classifier":
+                            mask_floating_objects = output > 0.05
                             # Image transformation
-                            tensor -= self.center[:,None,None]
-                            tensor /= self.scale[:,None,None]
+                            image *= 1e4
+                            image -= center[:,None,None]
+                            image /= scale[:,None,None]
 
                             # Apply sliding windows
-                            classifier_scores = self.classifier.sliding_windows(tensor, mask_floating_objects)
+                            classifier_scores = classifier_model.sliding_windows(image, mask_floating_objects)
                             mask_ship = classifier_scores > 5e-4
-                            y_logits[mask_ship] = 0.
-                        """
-                        y = (output > threshold).cpu()
-                        cm += np.bincount(y_true.ravel() * 2 + y.ravel(), minlength=4).reshape(2, 2).astype(int)
+                            output[mask_ship] = 0.
+
+                        y = (output > threshold).cpu().view(-1).numpy()
+                        y_true = target.cpu().view(-1).numpy().astype(bool)
+                        cm += np.bincount(y_true * 2 + y, minlength=4).reshape(2, 2).astype(int)
                 
                 yield model, fold, classifier, cm
 
@@ -126,17 +138,22 @@ if __name__ == "__main__":
     root_data = "floatingobjects\\data"
     predictions_path = "predictions"
 
-
-    for model, fold, classifier, confusion_matrix in predictions_esa(root_data, predictions_path):
+    for model, fold, classifier, cm in predictions_esa(root_data, predictions_path):
         with open(os.path.join("predictions-esa", "metrics.txt"), "a") as f:
             f.write(f"Model {model}, fold n°{fold}, {classifier}\n")
             f.write("Confusion matrix :\n")
 
+            # Take only some pixels, this is how ESA did their tests
+            N = 20000
+            cm = cm.astype(float)
+            n_true = cm.sum(axis=1)
+            cm = (N * cm / n_true[:,None]).astype(int)
+
             # Output confusion matrix
-            f.write(repr(confusion_matrix)+"\n")
+            f.write(repr(cm)+"\n")
 
             # Output Precision/recall/F1-score for water and floating objects
-            metrics = get_metrics(confusion_matrix)
+            metrics = get_metrics(cm)
             for i, c in enumerate(["water", "floating objects"]):
                 f.write(f"\nprecision {c} : {metrics[i,0]:.3f}\n")
                 f.write(f"recall {c} : {metrics[i,1]:.3f}\n")
