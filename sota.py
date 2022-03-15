@@ -27,8 +27,6 @@ from floatingobjects.data import FloatingSeaObjectDataset
 from floatingobjects.train import predict_images
 from floatingobjects.model import get_model
 
-from classifier import Classifier
-
 
 N_PIXELS_FOR_EACH_CLASS_FROM_IMAGE = 5
 LABELS = ["no floating", "floating"]
@@ -89,7 +87,7 @@ def feature_extraction_transform(x, y):
 
 def s2_to_ndvifdi(x):
     """
-    x : array, shape ... x D
+    x : array, shape ... x 12
     return : array, shape ... x 2
     """
     ndvi = ndvi_transform(x.T).T
@@ -115,26 +113,42 @@ def feature_extraction_transform_6(x, y):
     return x, y
 
 def s2_to_ndvifdi_test(x, y):
-    x_ = s2_to_ndvifdi(x.swapaxes(0,1))
-    x_ = x_.reshape(2, -1)
-    return x_.T, y.reshape(-1)
-
-def s2_to_6bands_test(x, y):
-    x_ = s2_to_6bands(x.swapaxes(0,1))
-    x_ = x_.reshape(6, -1)
-    return x_.T, y.reshape(-1)
-
-def s2_to_12bands_test(x, y):
-    x_ = x.reshape(-1, 12)
+    """
+    x : array, shape B x 12 x H x W
+    y : array, shape B x H x W
+    return : array, shape B*H*W x 2
+    """
+    x_ = s2_to_ndvifdi(x.swapaxes(1,3))
+    x_ = x_.reshape(-1, 2)
     return x_, y.reshape(-1)
 
+def s2_to_6bands_test(x, y):
+    """
+    x : array, shape B x 12 x H x W
+    y : array, shape B x H x W
+    return : array, shape B*H*W x 2
+    """
+    x_ = s2_to_6bands(x.swapaxes(1,3))
+    x_ = x_.reshape(-1, 6)
+    return x_, y.reshape(-1)
+
+def s2_to_12bands_test(x, y):
+    """
+    x : array, shape B x 12 x H x W
+    y : array, shape B x H x W
+    return : array, shape B*H*W x 12
+    """
+    x_ = x.swapaxes(0,1).reshape(12, -1)
+    return x_.T, y.reshape(-1)
+
 #############################################################################################################
-data_path = "data" # in our case, data is here
+data_path = "floatingobjects/data" # in our case, data is here
 image_size = 128
 
 threshold = 0.03
 N_pixels = 20000
 #seed = 1
+train, test, metrics = True, True, True
 
 transform_methods = {
     "train": {
@@ -149,8 +163,10 @@ transform_methods = {
     }
 }
 
-folds = [1, 2]
+#folds = [1, 2]
+folds = [1]
 methods = ["indices", "12-bands", "6-bands"]
+#methods = ["indices"]
 
 
 # Create classical methods
@@ -160,11 +176,14 @@ clf_classes = {
     "RF": make_pipeline(RandomForestClassifier(n_estimators=1000, max_depth=2, n_jobs=-1)),
     "HGB": make_pipeline(HistGradientBoostingClassifier())
 }
+clf_classes = {"NB": make_pipeline(GaussianNB())}
 
 # Load deep learning models
+model_names = ["unet", "manet"]
+model_names = [] # no dl
 models_dl = {
     f: {
-        model_name: get_model(model_name, inchannels=12, pretrained=False).to(device).eval() for model_name in ["unet", "manet"]
+        model_name: get_model(model_name, inchannels=12, pretrained=False).to(device).eval() for model_name in model_names
     } for f in folds
 }
 for f in folds:
@@ -175,7 +194,7 @@ for f in folds:
 
 # Load ships classifiers
 classifier_ships = {
-    f: Classifier(in_channels=12).to(device).eval() for f in folds
+    f: get_model("classifier", inchannels=12).to(device).eval() for f in folds
 }
 for f in folds:
     path = f"models\checkpoint-fold{f}.pt"
@@ -195,68 +214,67 @@ def main():
     }
 
     #### Train
-    print("Training\n")
-    for fold in tq(folds, desc="Folds"): # 1, 2
-        # dataset for train with no feature extraction, features aggregation
-        trainimagedataset = FloatingSeaObjectDataset(data_path, fold="train", foldn=fold, transform=None, output_size=image_size)
-        validmagedataset = FloatingSeaObjectDataset(data_path, fold="val", foldn=fold, transform=None, output_size=image_size)
+    if train:
+        print("Training\n")
+        for fold in tq(folds, desc="Folds"): # 1, 2
+            # dataset for train with no feature extraction, features aggregation
+            trainimagedataset = FloatingSeaObjectDataset(data_path, fold="train", foldn=fold, transform=None, output_size=image_size)
+            validmagedataset = FloatingSeaObjectDataset(data_path, fold="val", foldn=fold, transform=None, output_size=image_size)
 
-        x_train, y_train = draw_N_datapoints(trainimagedataset, N=1000)
-        print(x_train.shape)
-        x_test, y_test = draw_N_datapoints(validmagedataset, N=1000)
+            x_train, y_train = draw_N_datapoints(trainimagedataset, N=10000)
+            print(x_train.shape)
+            x_test, y_test = draw_N_datapoints(validmagedataset, N=1000)
 
-        for method in tq(methods, desc="Methods"): # "indices", "6-bands", "12-bands"
+            for method in tq(methods, desc="Methods"): # "indices", "6-bands", "12-bands"
 
-            transform_train = transform_methods["train"][method]
-            x_train_m, y_train_m = transform_train(x_train, y_train)
-            x_test_m, y_test_m = transform_train(x_test, y_test)
+                transform_train = transform_methods["train"][method]
+                x_train_m, y_train_m = transform_train(x_train, y_train)
+                x_test_m, y_test_m = transform_train(x_test, y_test)
 
-            for clf_name in tq(clf_classes, desc="Algorithms"):
-                clf = clfs[fold][method][clf_name]
-                clf.fit(x_train_m, y_train_m)
-                y_pred = clf.predict(x_test_m)
-                print(method + ", fold " + str(fold) + ", " + clf_name)
-                print(classification_report(y_test_m, y_pred, target_names=["water","floating objects"]))
-
-    #### Test
-    print("\nTest\n")
-
-    #confusion matrix
-    conf_mat = np.zeros((len(LABELS), len(LABELS)))
-
-    from time import time
+                for clf_name in tq(clf_classes, desc="Algorithms"):
+                    clf = clfs[fold][method][clf_name]
+                    clf.fit(x_train_m, y_train_m)
+                    y_pred = clf.predict(x_test_m)
+                    print(method + ", fold " + str(fold) + ", " + clf_name)
+                    print(classification_report(y_test_m, y_pred, target_names=["water","floating objects"]))
 
     metrics_dir = "metrics/"
     threshold = 0.03
+    if test:
+        #### Test
+        print("\nTest\n")
 
-    # SVM, RF, NB and HGB
-    for fold in tq(folds, desc="Folds"):
-        dir_fold = os.path.join(metrics_dir, str(fold))
-        os.makedirs(dir_fold, exist_ok=True)
+        #confusion matrix
+        conf_mat = np.zeros((len(LABELS), len(LABELS)))
 
-        # dataset for validation with no feature extraction
-        testimagedataset = FloatingSeaObjectDataset(data_path, fold="test", foldn=fold, transform=None, output_size=image_size)
-        test_loader = DataLoader(testimagedataset, batch_size=1, shuffle=False, num_workers=0)
+        from time import time
 
-        # Iterate through "indices", "6-bands"...
-        y_trues = []
-        for d, method in tq(zip([12,6,2], methods), desc="Methods"):
-            dir_method = os.path.join(dir_fold, method)
-            os.makedirs(dir_method, exist_ok=True)
+        # SVM, RF, NB and HGB
+        for fold in tq(folds, desc="Folds"):
+            dir_fold = os.path.join(metrics_dir, str(fold))
+            os.makedirs(dir_fold, exist_ok=True)
 
-            transform_test = transform_methods["test"][method]
+            # dataset for validation with no feature extraction
+            testimagedataset = FloatingSeaObjectDataset(data_path, fold="test", foldn=fold, transform=None, output_size=image_size)
+            test_loader = DataLoader(testimagedataset, batch_size=1, shuffle=False, num_workers=4)
 
-            # Iterate through dataset
-            for idx, (image, y_true, _) in tq(enumerate(test_loader), total=len(test_loader)):
-                if idx < 100:
-                    features, y_true = transform_test(image.numpy(), y_true.numpy())
+            # Iterate through "indices", "6-bands"...
+            for d, method in tq(zip([12,6,2], methods), desc="Methods"):
+                dir_method = os.path.join(dir_fold, method)
+                os.makedirs(dir_method, exist_ok=True)
+
+                transform_test = transform_methods["test"][method]
+
+                y_trues = []
+                # Iterate through dataset
+                for idx, (image, y_true, _) in tq(enumerate(test_loader), total=len(test_loader)):
+                    features, y_true = transform_test(image, y_true)
                     y_trues.append(y_true)
 
                     # Predict for each classifier
                     for k in clfs[fold][method]:
                         dir_clf = os.path.join(dir_method, k)
                         os.makedirs(dir_clf, exist_ok=True)
-
                         clf = clfs[fold][method][k]
                         y_pred = clf.predict(features)
                         torch.save(y_pred, os.path.join(dir_clf, f'y_pred_{idx}.pt'))
@@ -282,8 +300,8 @@ def main():
                             new_y_pred = new_output.view(-1).to("cpu").numpy()
                             torch.save(y_pred, os.path.join(dir_dl, f'y_pred_{idx}.pt'))
                             torch.save(new_y_pred, os.path.join(dir_dl_classifier, f'y_pred_{idx}.pt'))
-            y_trues = torch.stack(y_trues, dim=0)
-            torch.save(y_trues, os.path.join(dir_fold, f'y_true.pt'))
+                y_trues = torch.stack(y_trues, dim=0)
+                torch.save(y_trues, os.path.join(dir_fold, f'y_true.pt'))
 
 
         
@@ -293,61 +311,62 @@ def main():
     # Check metrics
 
     threshold = 0.03
-    N_pixels = 1000
+    N_pixels = 40000
 
     def load_y(path):
         return np.stack([torch.load(os.path.join(path,f)) for f in os.listdir(path)], axis=0)
     
-    for fold in folds:
-        dir_fold = os.path.join(metrics_dir, str(fold))
-        report = f"Fold {fold} report\n"
-        fold_report_path = os.path.join(dir_fold, "report.txt")
+    if metrics:
+        for fold in folds:
+            dir_fold = os.path.join(metrics_dir, str(fold))
+            report = f"Fold {fold} report\n"
+            fold_report_path = os.path.join(dir_fold, "report.txt")
 
-        print("Fold :", fold)
-        y_true = np.stack(torch.load(os.path.join(dir_fold, f'y_true.pt')), axis=0)
-        y_true_flat = np.vstack(y_true).reshape(-1)
-        idx_floating, = np.where(y_true_flat.astype(bool))
-        idx_water, = np.where(~y_true_flat.astype(bool))
-        idx_floating_choice = np.random.choice(idx_floating, N_pixels)
-        idx_water_choice = np.random.choice(idx_water, N_pixels)
-        idx = np.hstack([idx_floating_choice, idx_water_choice])
-        for method in methods:
-            print("Method :", method)
-            report += f"Method : {method}\n"
-            for k in clfs[fold][method]:
-                dir_clf = os.path.join(metrics_dir, str(fold), method, k)
-                y_pred = load_y(dir_clf)
-                
-                print("Model:", k)
-                y_pred_flat = np.vstack(y_pred).reshape(-1)
-                conf_mat = confusion_matrix(y_true_flat[idx], y_pred_flat[idx] > threshold)
-                print(conf_mat)
-                
-                report += f"Model : {k}\n"
-                report += str(conf_mat) + "\n"
-                report += classification_report(y_true_flat[idx], y_pred_flat[idx], target_names=["water","floating objects"]) + "\n"
-            
-            if method == "12-bands":
-                for k in models_dl[fold]:
+            print("Fold :", fold)
+            y_true = np.stack(torch.load(os.path.join(dir_fold, f'y_true.pt')), axis=0)
+            y_true_flat = np.vstack(y_true).reshape(-1)
+            idx_floating, = np.where(y_true_flat.astype(bool))
+            idx_water, = np.where(~y_true_flat.astype(bool))
+            idx_floating_choice = np.random.choice(idx_floating, N_pixels)
+            idx_water_choice = np.random.choice(idx_water, N_pixels)
+            idx = np.hstack([idx_floating_choice, idx_water_choice])
+            for method in methods:
+                print("Method :", method)
+                report += f"Method : {method}\n"
+                for k in clfs[fold][method]:
+                    dir_clf = os.path.join(metrics_dir, str(fold), method, k)
+                    y_pred = load_y(dir_clf)
+                    
                     print("Model:", k)
-                    for m in ["no_classifier", "with_classifier"]:
-                        print(m)
-                        dir_clf = os.path.join(metrics_dir, str(fold), method, k, m)
-                        y_pred = load_y(dir_clf)
-                        y_pred_flat = np.vstack(y_pred).reshape(-1)
-                        conf_mat = confusion_matrix(y_true_flat[idx], y_pred_flat[idx] > threshold)
-                        print(conf_mat)
+                    y_pred_flat = np.vstack(y_pred).reshape(-1)
+                    conf_mat = confusion_matrix(y_true_flat[idx], y_pred_flat[idx] > threshold)
+                    print(conf_mat)
+                    
+                    report += f"Model : {k}\n"
+                    report += str(conf_mat) + "\n"
+                    report += classification_report(y_true_flat[idx], y_pred_flat[idx], target_names=["water","floating objects"]) + "\n"
+                
+                if method == "12-bands":
+                    for k in models_dl[fold]:
+                        print("Model:", k)
+                        for m in ["no_classifier", "with_classifier"]:
+                            print(m)
+                            dir_clf = os.path.join(metrics_dir, str(fold), method, k, m)
+                            y_pred = load_y(dir_clf)
+                            y_pred_flat = np.vstack(y_pred).reshape(-1)
+                            conf_mat = confusion_matrix(y_true_flat[idx], y_pred_flat[idx] > threshold)
+                            print(conf_mat)
 
-                        report += f"Model : {k}\n"
-                        report += "With " if m == "with_classifier" else "No "
-                        report += "classifier\n"
-                        report += str(conf_mat) + "\n"
-                        report += classification_report(y_true_flat[idx], y_pred_flat[idx] > threshold, target_names=["water","floating objects"]) + "\n"
-        
-            report += "\n---\n"
-        
-        with open(fold_report_path, "w") as f:
-            f.write(report)
+                            report += f"Model : {k}\n"
+                            report += "With " if m == "with_classifier" else "No "
+                            report += "classifier\n"
+                            report += str(conf_mat) + "\n"
+                            report += classification_report(y_true_flat[idx], y_pred_flat[idx] > threshold, target_names=["water","floating objects"]) + "\n"
+            
+                report += "\n---\n"
+            
+            with open(fold_report_path, "w") as f:
+                f.write(report)
     
 
 
